@@ -1,25 +1,17 @@
 import os
 import re
-import warnings
-from flask import Flask, request, render_template, jsonify
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import gradio as gr
 import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import PyPDF2
 import pdfplumber
 
-warnings.filterwarnings("ignore", category=UserWarning)
+MODEL_PATH = "guilhermesumita000/email-classifier"  
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-MODEL_REPO = "guilhermesumita000/email-classifier"  
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO)
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO)
-model.eval()
+# Carrega tokenizer e modelo
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH).to(device)
 
 def clean_text(text):
     text = text.lower()
@@ -27,69 +19,50 @@ def clean_text(text):
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def predict(text):
-    cleaned = clean_text(text)
-    inputs = tokenizer(cleaned, return_tensors="pt", truncation=True, padding=True)
-    with torch.no_grad():
-        outputs = model(**inputs)
-        pred = torch.argmax(outputs.logits, dim=-1).item()
-    label = model.config.id2label[pred]
+def predict_email(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
+    outputs = model(**inputs)
+    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+    label_idx = torch.argmax(probs, dim=1).item()
+    label = model.config.id2label[label_idx]  # pega o nome da classe
     return label
 
-def extract_text_from_pdf(file_stream):
+def extract_text_from_pdf(file):
+    """Extrai texto de PDF"""
     text = ""
     try:
-        file_stream.seek(0)
-        reader = PyPDF2.PdfReader(file_stream)
+        reader = PyPDF2.PdfReader(file)
         text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
         if text:
             return text
     except Exception:
         pass
     try:
-        file_stream.seek(0)
-        with pdfplumber.open(file_stream) as pdf:
+        with pdfplumber.open(file) as pdf:
             text = "\n".join([page.extract_text() or "" for page in pdf.pages]).strip()
         return text
     except Exception:
-        return ""  
+        return ""
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/process', methods=['POST'])
-def process():
-    text = request.form.get('email_text')
-    file = request.files.get('email_file')
-
-    if file and file.filename:
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-        file.save(filepath)
-
-        try:
-            file_stream = open(filepath, "rb")
-            if file.filename.lower().endswith('.pdf'):
-                text_from_file = extract_text_from_pdf(file_stream)
-                if text_from_file:
-                    text = text_from_file
-                else:
-                    return jsonify({'error': 'PDF contém apenas imagens ou não foi possível extrair texto'}), 400
-            elif file.filename.lower().endswith('.txt') and not text:
-                text = file_stream.read().decode('utf-8')
-            file_stream.close()
-        except Exception as e:
-            return jsonify({'error': f'Erro ao processar o arquivo: {str(e)}'}), 400
+def classify_email(email_text, email_file=None):
+    text = email_text
+    if email_file:
+        file_ext = email_file.name.lower().split('.')[-1]
+        if file_ext == "pdf":
+            text_from_file = extract_text_from_pdf(email_file)
+            if text_from_file:
+                text = text_from_file
+            else:
+                return "Erro: PDF contém apenas imagens ou formato não suportado", ""
+        elif file_ext == "txt" and not text:
+            text = email_file.read().decode("utf-8")
 
     if not text or not text.strip():
-        return jsonify({'error': 'Nenhum texto fornecido ou extraído do arquivo'}), 400
+        return "Erro: Nenhum texto fornecido", ""
 
-    try:
-        label = predict(text)
-    except Exception as e:
-        return jsonify({'error': f'Erro ao processar o texto: {str(e)}'}), 500
+    label = predict_email(text)
 
-    if label == 'Produtivo':
+    if label.lower() == "produtivo":
         suggested = (
             f"Olá, obrigado pelo contato. Recebemos sua solicitação e vamos analisar. "
             f"Encaminhei ao time responsável — retornaremos com atualização em até 48h.\n\n"
@@ -101,7 +74,24 @@ def process():
             "Se for necessário alguma ação, por favor reenvie com mais detalhes."
         )
 
-    return jsonify({'category': label, 'suggested_reply': suggested})
+    # CORREÇÃO: retorna dois valores separados
+    return label, suggested
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+
+# --- Interface Gradio ---
+iface = gr.Interface(
+    fn=classify_email,
+    inputs=[
+        gr.Textbox(label="Texto do e-mail", placeholder="Cole o e-mail aqui..."),
+        gr.File(label="Arquivo PDF ou TXT (opcional)", file_types=[".pdf", ".txt"], type="filepath")
+    ],
+    outputs=[
+        gr.Label(num_top_classes=2, label="Categoria"),
+        gr.Textbox(label="Resposta Sugerida")
+    ],
+    title="Classificador de E-mails",
+    description="Classifica e-mails em Produtivo ou Não Produtivo e sugere resposta automática.",
+)
+
+if __name__ == "__main__":
+    iface.launch()
