@@ -1,0 +1,17 @@
+# Ignorar venv
+venv/
+.venv/
+
+Model/
+.Model/
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Arquivos grandes temporários
+.DS_Store

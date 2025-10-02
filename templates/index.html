@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Classificação de Emails</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; max-width: 900px; }
+        textarea { width: 100%; height: 120px; margin-bottom: 15px; }
+        button { padding: 10px 20px; cursor: pointer; margin-top: 5px; }
+        .result { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9; }
+        .error { margin-top: 20px; padding: 15px; border: 1px solid #f44336; border-radius: 5px; background-color: #ffe5e5; color: #d32f2f; }
+    </style>
+</head>
+<body>
+    <h1>Classificador de Emails</h1>
+    <form id="frm" method="POST" enctype="multipart/form-data">
+        <label>Cole o texto do email:</label><br>
+        <textarea name="email_text" id="email_text" placeholder="Cole o texto do email aqui..."></textarea><br>
+        
+        <label>Ou faça upload de um arquivo (.txt ou .pdf):</label><br>
+        <input type="file" name="email_file" id="email_file" accept=".txt,.pdf"/>
+        <button type="button" onclick="document.getElementById('email_file').value='';">Remover arquivo</button><br><br>
+        
+        <button type="submit">Classificar</button>
+    </form>
+
+    <div id="out"></div>
+
+    <script>
+        const frm = document.getElementById('frm');
+        const out = document.getElementById('out');
+
+        frm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            out.innerHTML = '';
+
+            const fd = new FormData(frm);
+            try {
+                const res = await fetch('/process', { method: 'POST', body: fd });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    out.innerHTML = `<div class="error">Erro: ${data.error}</div>`;
+                    return;
+                }
+
+                out.innerHTML = `
+                    <div class="result">
+                        <h3>Resultado:</h3>
+                        <p><b>Categoria:</b> ${data.category}</p>
+                        <p><b>Resposta sugerida:</b> ${data.suggested_reply}</p>
+                    </div>
+                `;
+            } catch (err) {
+                out.innerHTML = `<div class="error">Erro ao conectar com o servidor: ${err}</div>`;
+            }
+        });
+    </script>
+</body>
+</html>
